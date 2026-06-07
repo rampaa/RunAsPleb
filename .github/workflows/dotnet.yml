@@ -1,0 +1,36 @@
+name: .NET
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+
+    runs-on: windows-latest
+
+    strategy:
+      matrix:
+        platform: [x64, x86, ARM64]
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: 10.x
+        cache: true
+        cache-dependency-path: "**/packages.lock.json"
+
+    - name: Restore and validate lock files
+      run: dotnet restore --use-lock-file --force-evaluate --locked-mode -p:Platform=${{ matrix.platform }}
+
+    - name: Build
+      run: dotnet build --no-restore -p:Platform=${{ matrix.platform }}
+
+    - name: Test (x64 only)
+      if: matrix.platform == 'x64'
+      run: dotnet test --no-build -p:Platform=${{ matrix.platform }} --verbosity normal
