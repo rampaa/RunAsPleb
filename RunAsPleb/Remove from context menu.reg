@@ -1,0 +1,4 @@
+Windows Registry Editor Version 5.00
+
+[-HKEY_CURRENT_USER\Software\Classes\exefile\shell\RunAsPleb]
+[-HKEY_CURRENT_USER\Software\Classes\lnkfile\shell\RunAsPleb]

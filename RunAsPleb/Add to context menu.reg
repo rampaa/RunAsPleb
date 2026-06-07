@@ -1,0 +1,13 @@
+Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Software\Classes\exefile\shell\RunAsPleb]
+@="Run as standard user"
+
+[HKEY_CURRENT_USER\Software\Classes\exefile\shell\RunAsPleb\command]
+@="\"C:\\Users\\User\\Desktop\\Programs\\RunAsPleb\\RunAsPleb.exe\" \"%1\""
+
+[HKEY_CURRENT_USER\Software\Classes\lnkfile\shell\RunAsPleb]
+@="Run as standard user"
+
+[HKEY_CURRENT_USER\Software\Classes\lnkfile\shell\RunAsPleb\command]
+@="\"C:\\Users\\User\\Desktop\\Programs\\RunAsPleb\\RunAsPleb.exe\" \"%1\""
