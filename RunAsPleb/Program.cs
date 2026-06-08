@@ -24,34 +24,21 @@ file static class Program
         string? targetFileDirectory = Path.GetDirectoryName(targetFilePath);
         Debug.Assert(targetFileDirectory is not null);
 
-        if (!NativeMethods.OpenProcessToken(NativeMethods.CURRENT_PROCESS_HANDLE, NativeMethods.TOKEN_QUERY | NativeMethods.TOKEN_DUPLICATE, out nint tokenHandle))
+        if (!NativeMethods.OpenProcessToken(NativeMethods.CURRENT_PROCESS_HANDLE, NativeMethods.TOKEN_QUERY, out nint tokenHandleWithTokenQueryPrivilege))
         {
-            if (TryExplorerShellExecute(targetFilePath, targetFileDirectory))
-            {
-                return;
-            }
-
-            if (!Launch(targetFilePath, targetFileDirectory))
-            {
-                ShellExecute(targetFilePath, targetFileDirectory);
-            }
-
+            Launch(targetFilePath, targetFileDirectory);
             return;
         }
 
         try
         {
-            if (!IsTokenElevated(tokenHandle))
+            if (!IsTokenElevated(tokenHandleWithTokenQueryPrivilege))
             {
-                if (!Launch(targetFilePath, targetFileDirectory))
-                {
-                    ShellExecute(targetFilePath, targetFileDirectory);
-                }
-
+                Launch(targetFilePath, targetFileDirectory);
                 return;
             }
 
-            if (TryTokenDeElevation(targetFilePath, targetFileDirectory, tokenHandle))
+            if (TryTokenDeElevation(targetFilePath, targetFileDirectory))
             {
                 return;
             }
@@ -61,26 +48,23 @@ file static class Program
                 return;
             }
 
-            if (!Launch(targetFilePath, targetFileDirectory))
-            {
-                ShellExecute(targetFilePath, targetFileDirectory);
-            }
+            Launch(targetFilePath, targetFileDirectory);
         }
         finally
         {
-            if (tokenHandle is not 0)
+            if (tokenHandleWithTokenQueryPrivilege is not 0)
             {
-                _ = NativeMethods.CloseHandle(tokenHandle);
+                _ = NativeMethods.CloseHandle(tokenHandleWithTokenQueryPrivilege);
             }
         }
     }
 
-    private static bool IsTokenElevated(nint tokenHandle)
+    private static bool IsTokenElevated(nint tokenHandleWithTokenQueryPrivilege)
     {
-        return NativeMethods.GetTokenInformation(tokenHandle, NativeMethods.TOKEN_INFORMATION_CLASS.TokenElevation, out NativeMethods.TOKEN_ELEVATION elevation, Unsafe.SizeOf<NativeMethods.TOKEN_ELEVATION>(), out _) && elevation.TokenIsElevated is not 0;
+        return NativeMethods.GetTokenInformation(tokenHandleWithTokenQueryPrivilege, NativeMethods.TOKEN_INFORMATION_CLASS.TokenElevation, out NativeMethods.TOKEN_ELEVATION elevation, Unsafe.SizeOf<NativeMethods.TOKEN_ELEVATION>(), out _) && elevation.TokenIsElevated is not 0;
     }
 
-    private static bool Launch(string targetFilePath, string targetFileDirectory)
+    private static void Launch(string targetFilePath, string targetFileDirectory)
     {
         NativeMethods.STARTUPINFO startupInfo = new()
         {
@@ -94,44 +78,58 @@ file static class Program
         {
             _ = NativeMethods.CloseHandle(processInformation.hProcess);
             _ = NativeMethods.CloseHandle(processInformation.hThread);
-            return true;
+            return;
         }
 
-        return false;
+        // CreateProcessW can't run shortcuts but ShellExecuteW can
+        ShellExecute(targetFilePath, targetFileDirectory);
     }
 
-    private static bool TryTokenDeElevation(string targetFilePath, string targetFileDirectory, nint tokenHandle)
+    private static bool TryTokenDeElevation(string targetFilePath, string targetFileDirectory)
     {
+        nint currentProcessTokenHandle = 0;
         nint newTokenHandle = 0;
+        nint environment = 0;
         try
         {
-            if (!NativeMethods.GetTokenInformation(tokenHandle, NativeMethods.TOKEN_INFORMATION_CLASS.TokenLinkedToken, out NativeMethods.TOKEN_LINKED_TOKEN linkedToken, Unsafe.SizeOf<NativeMethods.TOKEN_LINKED_TOKEN>(), out _))
+            if (NativeMethods.OpenProcessToken(NativeMethods.CURRENT_PROCESS_HANDLE, NativeMethods.TOKEN_QUERY | NativeMethods.TOKEN_DUPLICATE | NativeMethods.TOKEN_ASSIGN_PRIMARY, out currentProcessTokenHandle))
             {
-                if (!NativeMethods.CreateRestrictedToken(tokenHandle, NativeMethods.LUA_TOKEN, 0, 0, 0, 0, 0, 0, out newTokenHandle))
+                // Requires TOKEN_QUERY
+                if (NativeMethods.GetTokenInformation(currentProcessTokenHandle, NativeMethods.TOKEN_INFORMATION_CLASS.TokenLinkedToken, out NativeMethods.TOKEN_LINKED_TOKEN linkedToken, Unsafe.SizeOf<NativeMethods.TOKEN_LINKED_TOKEN>(), out _))
                 {
-                    return false;
+                    newTokenHandle = linkedToken.LinkedToken;
+                }
+                else
+                {
+                    // Requires TOKEN_DUPLICATE
+                    _ = NativeMethods.CreateRestrictedToken(currentProcessTokenHandle, NativeMethods.LUA_TOKEN, 0, 0, 0, 0, 0, 0, out newTokenHandle);
+                }
+
+                if (newTokenHandle is not 0)
+                {
+                    NativeMethods.STARTUPINFO startupInfo = new()
+                    {
+                        cb = Unsafe.SizeOf<NativeMethods.STARTUPINFO>(),
+                        dwFlags = NativeMethods.STARTF_USESHOWWINDOW,
+                        wShowWindow = NativeMethods.SW_SHOWNORMAL
+                    };
+
+                    environment = NativeMethods.GetEnvironmentStringsW();
+
+                    // Requires TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY and SE_IMPERSONATE_NAME
+                    // We don't need to set AdjustTokenPrivileges since for an elevated process we already have SE_IMPERSONATE_NAME
+                    bool success = NativeMethods.CreateProcessWithTokenW(newTokenHandle, 0, targetFilePath, null, NativeMethods.CREATE_UNICODE_ENVIRONMENT, environment, targetFileDirectory, ref startupInfo, out NativeMethods.PROCESS_INFORMATION processInfo);
+                    if (success)
+                    {
+                        _ = NativeMethods.CloseHandle(processInfo.hProcess);
+                        _ = NativeMethods.CloseHandle(processInfo.hThread);
+                    }
+
+                    return success;
                 }
             }
-            else
-            {
-                newTokenHandle = linkedToken.LinkedToken;
-            }
 
-            NativeMethods.STARTUPINFO startupInfo = new()
-            {
-                cb = Unsafe.SizeOf<NativeMethods.STARTUPINFO>(),
-                dwFlags = NativeMethods.STARTF_USESHOWWINDOW,
-                wShowWindow = NativeMethods.SW_SHOWNORMAL
-            };
-
-            bool success = NativeMethods.CreateProcessWithTokenW(newTokenHandle, 0, targetFilePath, null, 0, 0, targetFileDirectory, ref startupInfo, out NativeMethods.PROCESS_INFORMATION processInfo);
-            if (success)
-            {
-                _ = NativeMethods.CloseHandle(processInfo.hProcess);
-                _ = NativeMethods.CloseHandle(processInfo.hThread);
-            }
-
-            return success;
+            return false;
         }
         catch
         {
@@ -139,15 +137,30 @@ file static class Program
         }
         finally
         {
+            if (currentProcessTokenHandle is not 0)
+            {
+                _ = NativeMethods.CloseHandle(currentProcessTokenHandle);
+            }
+
             if (newTokenHandle is not 0)
             {
                 _ = NativeMethods.CloseHandle(newTokenHandle);
+            }
+
+            if (environment is not 0)
+            {
+                _ = NativeMethods.FreeEnvironmentStringsW(environment);
             }
         }
     }
 
     private static bool TryExplorerShellExecute(string targetFilePath, string targetFileDirectory)
     {
+        if (NativeMethods.GetShellWindow() is 0)
+        {
+            return false;
+        }
+
         try
         {
             // ReSharper disable once SuspiciousTypeConversion.Global

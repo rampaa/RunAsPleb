@@ -8,12 +8,16 @@ internal static partial class NativeMethods
 {
     public const uint TOKEN_QUERY = 0x0008;
     public const uint TOKEN_DUPLICATE = 0x0002;
+    public const uint TOKEN_ASSIGN_PRIMARY = 0x0001;
+
     public const uint LUA_TOKEN = 0x4;
     public const nint CURRENT_PROCESS_HANDLE = -1;
 
     public const int STARTF_USESHOWWINDOW = 0x00000001;
 
     public const short SW_SHOWNORMAL = 1;
+
+    public const int CREATE_UNICODE_ENVIRONMENT = 0x00000400;
 
     internal enum TOKEN_INFORMATION_CLASS
     {
@@ -66,6 +70,19 @@ internal static partial class NativeMethods
     {
         public int TokenIsElevated;
     }
+
+    [LibraryImport("user32.dll", EntryPoint = "GetShellWindow")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    public static partial nint GetShellWindow();
+
+    [LibraryImport("kernel32.dll", EntryPoint = "GetEnvironmentStringsW")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    public static partial nint GetEnvironmentStringsW();
+
+    [LibraryImport("kernel32.dll", EntryPoint = "FreeEnvironmentStringsW")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool FreeEnvironmentStringsW(nint lpszEnvironmentBlock);
 
     [LibraryImport("advapi32.dll", EntryPoint = "OpenProcessToken", SetLastError = true)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
