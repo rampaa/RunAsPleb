@@ -1,5 +1,13 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using Windows.Win32;
+using Windows.Win32.Foundation;
+using Windows.Win32.Storage.FileSystem;
+using Windows.Win32.System.Com;
+using Windows.Win32.System.Com.StructuredStorage;
+using Windows.Win32.System.Variant;
+using Windows.Win32.UI.Shell;
+using Windows.Win32.UI.Shell.PropertiesSystem;
 
 namespace RunAsPleb;
 
@@ -38,16 +46,12 @@ file static class Program
                 return;
             }
 
-            if (TryTokenDeElevation(targetFilePath, targetFileDirectory))
+            if (TryLaunchWithExplorerToken(targetFilePath, targetFileDirectory))
             {
                 return;
             }
 
-            if (TryExplorerShellExecute(targetFilePath, targetFileDirectory))
-            {
-                return;
-            }
-
+            Environment.SetEnvironmentVariable("__COMPAT_LAYER", null);
             Launch(targetFilePath, targetFileDirectory);
         }
         finally
@@ -85,51 +89,84 @@ file static class Program
         ShellExecute(targetFilePath, targetFileDirectory);
     }
 
-    private static bool TryTokenDeElevation(string targetFilePath, string targetFileDirectory)
+    private static void ShellExecute(string targetFilePath, string targetFileDirectory)
     {
-        nint currentProcessTokenHandle = 0;
-        nint newTokenHandle = 0;
+        _ = NativeMethods.ShellExecuteW(0, "open", targetFilePath, null, targetFileDirectory, 1);
+    }
+
+    private static bool TryLaunchWithExplorerToken(string targetFilePath, string targetFileDirectory)
+    {
+        nint explorerProcessHandle = 0;
+        nint explorerTokenHandle = 0;
+        nint primaryTokenHandle = 0;
         nint environment = 0;
         try
         {
-            if (NativeMethods.OpenProcessToken(NativeMethods.CURRENT_PROCESS_HANDLE, NativeMethods.TOKEN_QUERY | NativeMethods.TOKEN_DUPLICATE | NativeMethods.TOKEN_ASSIGN_PRIMARY, out currentProcessTokenHandle))
+            nint shellWindow = NativeMethods.GetShellWindow();
+            if (shellWindow is 0)
             {
-                // Requires TOKEN_QUERY
-                if (NativeMethods.GetTokenInformation(currentProcessTokenHandle, NativeMethods.TOKEN_INFORMATION_CLASS.TokenLinkedToken, out NativeMethods.TOKEN_LINKED_TOKEN linkedToken, Unsafe.SizeOf<NativeMethods.TOKEN_LINKED_TOKEN>(), out _))
-                {
-                    newTokenHandle = linkedToken.LinkedToken;
-                }
-                else
-                {
-                    // Requires TOKEN_DUPLICATE
-                    _ = NativeMethods.CreateRestrictedToken(currentProcessTokenHandle, NativeMethods.LUA_TOKEN, 0, 0, 0, 0, 0, 0, out newTokenHandle);
-                }
-
-                if (newTokenHandle is not 0)
-                {
-                    NativeMethods.STARTUPINFO startupInfo = new()
-                    {
-                        cb = Unsafe.SizeOf<NativeMethods.STARTUPINFO>(),
-                        dwFlags = NativeMethods.STARTF_USESHOWWINDOW,
-                        wShowWindow = NativeMethods.SW_SHOWNORMAL
-                    };
-
-                    environment = NativeMethods.GetEnvironmentStringsW();
-
-                    // Requires TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY and SE_IMPERSONATE_NAME
-                    // We don't need to set AdjustTokenPrivileges since for an elevated process we already have SE_IMPERSONATE_NAME
-                    bool success = NativeMethods.CreateProcessWithTokenW(newTokenHandle, 0, targetFilePath, null, NativeMethods.CREATE_UNICODE_ENVIRONMENT, environment, targetFileDirectory, ref startupInfo, out NativeMethods.PROCESS_INFORMATION processInfo);
-                    if (success)
-                    {
-                        _ = NativeMethods.CloseHandle(processInfo.hProcess);
-                        _ = NativeMethods.CloseHandle(processInfo.hThread);
-                    }
-
-                    return success;
-                }
+                return false;
             }
 
-            return false;
+            _ = NativeMethods.GetWindowThreadProcessId(shellWindow, out uint explorerPid);
+            if (explorerPid is 0)
+            {
+                return false;
+            }
+
+            explorerProcessHandle = NativeMethods.OpenProcess(NativeMethods.PROCESS_QUERY_INFORMATION, false, explorerPid);
+            if (explorerProcessHandle is 0)
+            {
+                return false;
+            }
+
+            if (!NativeMethods.OpenProcessToken(explorerProcessHandle, NativeMethods.TOKEN_DUPLICATE, out explorerTokenHandle))
+            {
+                return false;
+            }
+
+            if (!NativeMethods.DuplicateTokenEx(explorerTokenHandle, NativeMethods.TOKEN_ASSIGN_PRIMARY | NativeMethods.TOKEN_DUPLICATE | NativeMethods.TOKEN_QUERY | NativeMethods.TOKEN_ADJUST_DEFAULT | NativeMethods.TOKEN_ADJUST_SESSIONID, 0, NativeMethods.SecurityImpersonation, NativeMethods.TokenPrimary, out primaryTokenHandle))
+            {
+                return false;
+            }
+
+            string? commandLine = null;
+            if (Path.GetExtension(targetFilePath) is ".lnk")
+            {
+                (targetFilePath, string arguments, targetFileDirectory) = ResolveShortcut(targetFilePath);
+                if (string.IsNullOrEmpty(targetFilePath) || !File.Exists(targetFilePath))
+                {
+                    return false;
+                }
+
+                if (string.IsNullOrWhiteSpace(targetFileDirectory))
+                {
+                    string? workingDirectory = Path.GetDirectoryName(targetFilePath);
+                    Debug.Assert(workingDirectory is not null);
+                    targetFileDirectory = workingDirectory;
+                }
+
+                commandLine = string.IsNullOrWhiteSpace(arguments)
+                    ? $"\"{targetFilePath}\""
+                    : $"\"{targetFilePath}\" {arguments}";
+            }
+
+            NativeMethods.STARTUPINFO startupInfo = new()
+            {
+                cb = Unsafe.SizeOf<NativeMethods.STARTUPINFO>(),
+                dwFlags = NativeMethods.STARTF_USESHOWWINDOW,
+                wShowWindow = NativeMethods.SW_SHOWNORMAL
+            };
+
+            environment = NativeMethods.GetEnvironmentStringsW();
+            bool success = NativeMethods.CreateProcessWithTokenW(primaryTokenHandle, 0, targetFilePath, commandLine, NativeMethods.CREATE_UNICODE_ENVIRONMENT, environment, targetFileDirectory, ref startupInfo, out NativeMethods.PROCESS_INFORMATION processInfo);
+            if (success)
+            {
+                _ = NativeMethods.CloseHandle(processInfo.hProcess);
+                _ = NativeMethods.CloseHandle(processInfo.hThread);
+            }
+
+            return success;
         }
         catch
         {
@@ -137,14 +174,19 @@ file static class Program
         }
         finally
         {
-            if (currentProcessTokenHandle is not 0)
+            if (explorerProcessHandle is not 0)
             {
-                _ = NativeMethods.CloseHandle(currentProcessTokenHandle);
+                _ = NativeMethods.CloseHandle(explorerProcessHandle);
             }
 
-            if (newTokenHandle is not 0)
+            if (explorerTokenHandle is not 0)
             {
-                _ = NativeMethods.CloseHandle(newTokenHandle);
+                _ = NativeMethods.CloseHandle(explorerTokenHandle);
+            }
+
+            if (primaryTokenHandle is not 0)
+            {
+                _ = NativeMethods.CloseHandle(primaryTokenHandle);
             }
 
             if (environment is not 0)
@@ -154,28 +196,49 @@ file static class Program
         }
     }
 
-    private static bool TryExplorerShellExecute(string targetFilePath, string targetFileDirectory)
+    private static unsafe (string target, string arguments, string workingDirectory) ResolveShortcut(string lnkPath)
     {
-        if (NativeMethods.GetShellWindow() is 0)
-        {
-            return false;
-        }
+        IShellLinkW shellLink = ShellLink.CreateInstance<IShellLinkW>();
+        ((IPersistFile)shellLink).Load(lnkPath, 0);
 
-        try
-        {
-            // ReSharper disable once SuspiciousTypeConversion.Global
-            NativeMethods.IShellDispatch2 shell = (NativeMethods.IShellDispatch2)new NativeMethods.ShellApplication();
-            shell.ShellExecute(targetFilePath, null, targetFileDirectory, "open", 1);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
+        char* targetBuffer = stackalloc char[260];
+        char* workDirBuffer = stackalloc char[260];
+        WIN32_FIND_DATAW findData = default;
+
+        shellLink.GetPath(targetBuffer, 260, &findData, (uint)SLGP_FLAGS.SLGP_RAWPATH);
+        shellLink.GetWorkingDirectory(workDirBuffer, 260);
+
+        return (
+            Environment.ExpandEnvironmentVariables(new string(targetBuffer)),
+            Environment.ExpandEnvironmentVariables(GetArguments(shellLink)),
+            Environment.ExpandEnvironmentVariables(new string(workDirBuffer))
+        );
     }
 
-    private static void ShellExecute(string targetFilePath, string targetFileDirectory)
+    private static unsafe string GetArguments(IShellLinkW shellLink)
     {
-        _ = NativeMethods.ShellExecuteW(0, "open", targetFilePath, null, targetFileDirectory, 1);
+        IPropertyStore store = (IPropertyStore)shellLink;
+        store.GetValue(PInvoke.PKEY_Link_Arguments, out PROPVARIANT prop);
+        try
+        {
+            if (prop.Anonymous.Anonymous.vt is VARENUM.VT_EMPTY or VARENUM.VT_NULL)
+            {
+                return "";
+            }
+
+            _ = PInvoke.PropVariantToStringAlloc(prop, out PWSTR pszOut);
+            try
+            {
+                return pszOut.ToString();
+            }
+            finally
+            {
+                PInvoke.CoTaskMemFree(pszOut.Value);
+            }
+        }
+        finally
+        {
+            _ = PInvoke.PropVariantClear(ref prop);
+        }
     }
 }

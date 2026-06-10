@@ -1,0 +1,12 @@
+IShellLinkW
+IPersistFile
+ShellLink
+WIN32_FIND_DATAW
+IPropertyStore
+PROPVARIANT
+VARENUM
+PKEY_Link_Arguments
+PropVariantClear
+PropVariantToStringAlloc
+CoTaskMemFree
+SLGP_FLAGS

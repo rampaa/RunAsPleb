@@ -9,8 +9,9 @@ internal static partial class NativeMethods
     public const uint TOKEN_QUERY = 0x0008;
     public const uint TOKEN_DUPLICATE = 0x0002;
     public const uint TOKEN_ASSIGN_PRIMARY = 0x0001;
+    public const uint TOKEN_ADJUST_DEFAULT = 0x0080;
+    public const uint TOKEN_ADJUST_SESSIONID = 0x0100;
 
-    public const uint LUA_TOKEN = 0x4;
     public const nint CURRENT_PROCESS_HANDLE = -1;
 
     public const int STARTF_USESHOWWINDOW = 0x00000001;
@@ -19,13 +20,25 @@ internal static partial class NativeMethods
 
     public const int CREATE_UNICODE_ENVIRONMENT = 0x00000400;
 
+    public const uint PROCESS_QUERY_INFORMATION = 0x0400;
+    public const int SecurityImpersonation = 2;
+    public const int TokenPrimary = 1;
+
     internal enum TOKEN_INFORMATION_CLASS
     {
         // ReSharper disable once UnusedMember.Global
         None = 0,
-        TokenLinkedToken = 19,
         TokenElevation = 20
     }
+
+    [LibraryImport("advapi32.dll", EntryPoint = "DuplicateTokenEx", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool DuplicateTokenEx(nint hExistingToken, uint dwDesiredAccess, nint lpTokenAttributes, int ImpersonationLevel, int TokenType, out nint phNewToken);
+
+    [LibraryImport("kernel32.dll", EntryPoint = "OpenProcess", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    public static partial nint OpenProcess(uint dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, uint dwProcessId);
 
     [StructLayout(LayoutKind.Sequential)]
     internal record struct STARTUPINFO
@@ -60,16 +73,14 @@ internal static partial class NativeMethods
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    internal record struct TOKEN_LINKED_TOKEN
-    {
-        public nint LinkedToken;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
     internal record struct TOKEN_ELEVATION
     {
         public int TokenIsElevated;
     }
+
+    [LibraryImport("user32.dll", EntryPoint = "GetWindowThreadProcessId")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    public static partial uint GetWindowThreadProcessId(nint hWnd, out uint lpdwProcessId);
 
     [LibraryImport("user32.dll", EntryPoint = "GetShellWindow")]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
@@ -94,16 +105,6 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool GetTokenInformation(nint TokenHandle, TOKEN_INFORMATION_CLASS TokenInformationClass, out TOKEN_ELEVATION TokenInformation, int TokenInformationLength, out int ReturnLength);
 
-    [LibraryImport("advapi32.dll", EntryPoint = "GetTokenInformation", SetLastError = true)]
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool GetTokenInformation(nint TokenHandle, TOKEN_INFORMATION_CLASS TokenInformationClass, out TOKEN_LINKED_TOKEN TokenInformation, int TokenInformationLength, out int ReturnLength);
-
-    [LibraryImport("advapi32.dll", EntryPoint = "CreateRestrictedToken", SetLastError = true)]
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool CreateRestrictedToken(nint ExistingTokenHandle, uint Flags, uint DisableSidCount, nint SidsToDisable, uint DeletePrivilegeCount, nint PrivilegesToDelete, uint RestrictedSidCount, nint SidsToRestrict, out nint NewTokenHandle);
-
     [LibraryImport("advapi32.dll", EntryPoint = "CreateProcessWithTokenW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -122,21 +123,4 @@ internal static partial class NativeMethods
     [LibraryImport("shell32.dll", EntryPoint = "ShellExecuteW", StringMarshalling = StringMarshalling.Utf16)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     public static partial nint ShellExecuteW(nint hwnd, string lpOperation, string lpFile, string? lpParameters, string? lpDirectory, int nShowCmd);
-
-    [ComImport]
-    [Guid("13709620-C279-11CE-A49E-444553540000")]
-    // ReSharper disable once ClassCanBeSealed.Global
-    internal class ShellApplication;
-
-    [ComImport]
-    [Guid("A4C6892C-3BA9-11D2-9DEA-00C04FB16162")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIDispatch)]
-    internal interface IShellDispatch2
-    {
-        public void ShellExecute([MarshalAs(UnmanagedType.BStr)] string File,
-            [MarshalAs(UnmanagedType.Struct)] object? vArgs,
-            [MarshalAs(UnmanagedType.Struct)] object? vDir,
-            [MarshalAs(UnmanagedType.Struct)] object? vOperation,
-            [MarshalAs(UnmanagedType.Struct)] object? nShowCmd);
-    }
 }
