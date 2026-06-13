@@ -2,7 +2,7 @@
 
 RunAsPleb is a program for launching applications with standard user privileges. It is useful when an application requests administrator privileges (for example, via `requireAdministrator`) even when it does not necessarily need them.
 
-When launched through RunAsPleb, various techniques are used in an attempt to run the application without elevated privileges. However, it is not always possible to run applications without administrator privileges, and even when it is, there is no guarantee that the application will behave as expected. This is a best-effort approach.
+When launched through RunAsPleb, various techniques are used in an attempt to run the application without elevated privileges. However, it is not always possible to run applications without administrator privileges, and even when it is, there is no guarantee that the application will behave as expected. This is a best-effort solution.
 
 ## How do I use RunAsPleb?
 
