@@ -199,6 +199,7 @@ file static class Program
     private static unsafe (string target, string arguments, string workingDirectory) ResolveShortcut(string lnkPath)
     {
         IShellLinkW shellLink = ShellLink.CreateInstance<IShellLinkW>();
+        // ReSharper disable once SuspiciousTypeConversion.Global
         ((IPersistFile)shellLink).Load(lnkPath, 0);
 
         char* targetBuffer = stackalloc char[260];
@@ -217,6 +218,7 @@ file static class Program
 
     private static unsafe string GetArguments(IShellLinkW shellLink)
     {
+        // ReSharper disable once SuspiciousTypeConversion.Global
         IPropertyStore store = (IPropertyStore)shellLink;
         store.GetValue(PInvoke.PKEY_Link_Arguments, out PROPVARIANT prop);
         try
